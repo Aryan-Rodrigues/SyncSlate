@@ -1,0 +1,105 @@
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { MobileSidebar } from '@/components/mobile-sidebar'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { CreateWorkspaceModal } from '@/components/modals/create-workspace-modal'
+import { ChevronDown } from 'lucide-react'
+
+const workspaces = [
+  { id: 'acme-corp', name: 'Acme Corp' },
+  { id: 'startup-inc', name: 'Startup Inc' },
+]
+
+export function TopBar() {
+  const router = useRouter()
+  const [currentWorkspace, setCurrentWorkspace] = useState(workspaces[0])
+
+  const handleWorkspaceChange = (workspaceId: string) => {
+    const workspace = workspaces.find(w => w.id === workspaceId)
+    if (workspace) {
+      setCurrentWorkspace(workspace)
+      router.push(`/dashboard?workspace=${workspaceId}`)
+    }
+  }
+
+  const handleLogout = () => {
+    // Placeholder: In a real app, this would clear auth state and redirect
+    router.push('/login')
+  }
+
+  return (
+    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6">
+      <MobileSidebar />
+      
+      <div className="flex items-center flex-1 gap-4">
+        <DropdownMenu>
+          <DropdownMenuTrigger className="text-primary" asChild>
+            <Button variant="outline" className="gap-2">
+              {currentWorkspace.name}
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel className="text-primary">Workspaces</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {workspaces.map((workspace) => (
+              <DropdownMenuItem
+                key={workspace.id}
+                className="text-primary"
+                onClick={() => handleWorkspaceChange(workspace.id)}
+              >
+                {workspace.name}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href="/workspaces" className="text-primary">
+                Manage workspaces
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <CreateWorkspaceModal>
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="text-primary">
+                Create workspace
+              </DropdownMenuItem>
+            </CreateWorkspaceModal>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" className="relative h-9 w-9 rounded-full">
+            <Avatar className="h-9 w-9">
+              <AvatarFallback>JD</AvatarFallback>
+            </Avatar>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel>My Account</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link href="/settings/profile">Profile</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href="/settings">Settings</Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleLogout}>Log out</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </header>
+  )
+}
