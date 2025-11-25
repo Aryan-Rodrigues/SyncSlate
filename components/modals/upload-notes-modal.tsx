@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,9 +15,30 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Upload } from 'lucide-react'
+import { supabase } from '@/lib/supabase/client'
+import { toast } from 'sonner'
+import { useRouter } from 'next/navigation'
 
-export function UploadNotesModal({ children }: { children: React.ReactNode }) {
+export function UploadNotesModal({ 
+  children, 
+  onSuccess 
+}: { 
+  children: React.ReactNode
+  onSuccess?: () => void
+}) {
   const [open, setOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [user, setUser] = useState<any>(null)
+  const router = useRouter()
+
+  useEffect(() => {
+    // Get current user
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      setUser(user)
+    }
+    getUser()
+  }, [])
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -80,28 +101,111 @@ export function UploadNotesModal({ children }: { children: React.ReactNode }) {
             </Button>
             <Button 
               type="submit" 
+              disabled={isLoading || !user}
               onClick={async (e) => {
                 e.preventDefault()
-                // Mock upload - simulate processing
+                
+                if (!user) {
+                  toast.error('You must be logged in to upload meetings')
+                  return
+                }
+
                 const form = e.currentTarget.closest('form')
-                if (form) {
-                  const formData = new FormData(form)
-                  const title = formData.get('meeting-title') as string
-                  const date = formData.get('meeting-date') as string
-                  
-                  if (title && date) {
-                    // Simulate upload
-                    await new Promise(resolve => setTimeout(resolve, 1000))
-                    // In a real app, this would add the meeting to the list
-                    console.log('[Mock] Uploading meeting notes:', { title, date })
-                    setOpen(false)
-                    // Reset form
-                    form.reset()
+                if (!form) return
+
+                const formData = new FormData(form)
+                const title = formData.get('meeting-title') as string
+                const rawNotes = formData.get('notes') as string
+                const date = formData.get('meeting-date') as string
+                
+                if (!title || !rawNotes || !date) {
+                  toast.error('Please fill in all required fields')
+                  return
+                }
+
+                setIsLoading(true)
+
+                try {
+                  // Insert meeting into Supabase first (without summary)
+                  const { data: meetingData, error: insertError } = await supabase
+                    .from('meetings')
+                    .insert({
+                      user_id: user.id,
+                      title,
+                      raw_notes: rawNotes,
+                      ai_summary: null, // Will be updated after summarization
+                      meeting_date: date,
+                    })
+                    .select()
+                    .single()
+
+                  if (insertError) {
+                    throw insertError
                   }
+
+                  if (!meetingData) {
+                    throw new Error('Failed to create meeting')
+                  }
+
+                  // Get the session token for the API call
+                  const { data: { session } } = await supabase.auth.getSession()
+                  const accessToken = session?.access_token
+
+                  // Call the summarize API to generate AI summary
+                  try {
+                    const summarizeResponse = await fetch('/api/summarize', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}),
+                      },
+                      body: JSON.stringify({
+                        meeting_id: meetingData.id,
+                        raw_notes: rawNotes,
+                        title,
+                        meeting_date: date,
+                      }),
+                    })
+
+                    if (summarizeResponse.ok) {
+                      const summaryData = await summarizeResponse.json()
+                      
+                      // Update the meeting with the AI summary
+                      if (summaryData.summary) {
+                        await supabase
+                          .from('meetings')
+                          .update({ ai_summary: summaryData.summary })
+                          .eq('id', meetingData.id)
+                      }
+                    } else {
+                      console.warn('Summarization failed, but meeting was created')
+                    }
+                  } catch (summaryError) {
+                    // If summarization fails, the meeting is still created
+                    console.error('Error summarizing meeting:', summaryError)
+                    toast.info('Meeting uploaded, but summary generation is pending')
+                  }
+
+                  toast.success('Meeting uploaded successfully!')
+                  setOpen(false)
+                  form.reset()
+                  
+                  // Trigger refresh callback if provided
+                  if (onSuccess) {
+                    onSuccess()
+                  } else {
+                    // Fallback to page refresh
+                    router.refresh()
+                  }
+                } catch (error: any) {
+                  console.error('Error uploading meeting:', error)
+                  toast.error(error?.message || 'Failed to upload meeting. Please try again.')
+                } finally {
+                  setIsLoading(false)
                 }
               }}
             >
-              Upload & Process
+              {isLoading ? 'Uploading...' : 'Upload & Process'}
             </Button>
           </DialogFooter>
         </form>

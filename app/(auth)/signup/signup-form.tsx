@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from 'sonner'
+import { supabase } from '@/lib/supabase/client'
 
 export function SignUpForm() {
   const router = useRouter()
@@ -18,6 +19,37 @@ export function SignUpForm() {
     password: '',
     confirmPassword: '',
   })
+
+  const handleSignUp = async (email: string, password: string, fullName: string) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName, // Store name in user metadata
+        },
+      },
+    })
+    if (error) throw error
+    
+    // Check if email confirmation is required
+    // If user is immediately signed in (no email confirmation), redirect to dashboard
+    if (data.user && data.session) {
+      // Wait a moment for the session to be established
+      await new Promise(resolve => setTimeout(resolve, 200))
+      
+      // Verify the session is set
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        // Use window.location for a full page reload to ensure components get the session
+        window.location.href = '/dashboard'
+        return
+      }
+    }
+    
+    // If email confirmation is required, show message
+    toast.success('Account created! Please check your email to confirm your account.')
+  }
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -30,15 +62,10 @@ export function SignUpForm() {
     setIsLoading(true)
 
     try {
-      // Placeholder: In a real app, this would call an API
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      // Simulate successful signup
-      toast.success('Account created successfully!')
-      router.push('/dashboard')
-    } catch (error) {
-      toast.error('Failed to create account. Please try again.')
-    } finally {
+      await handleSignUp(formData.email, formData.password, formData.name)
+      // Toast is shown in handleSignUp
+    } catch (error: any) {
+      toast.error(error?.message || 'Failed to create account. Please try again.')
       setIsLoading(false)
     }
   }

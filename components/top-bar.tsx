@@ -16,6 +16,8 @@ import {
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { CreateWorkspaceModal } from '@/components/modals/create-workspace-modal'
 import { ChevronDown } from 'lucide-react'
+import { supabase } from '@/lib/supabase/client'
+import { toast } from 'sonner'
 
 const workspaces = [
   { id: 'acme-corp', name: 'Acme Corp' },
@@ -34,9 +36,18 @@ export function TopBar() {
     }
   }
 
-  const handleLogout = () => {
-    // Placeholder: In a real app, this would clear auth state and redirect
-    router.push('/login')
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        throw error
+      }
+      router.push('/login')
+      toast.success('Successfully signed out')
+    } catch (error: any) {
+      console.error('Error signing out:', error)
+      toast.error('Failed to sign out. Please try again.')
+    }
   }
 
   return (

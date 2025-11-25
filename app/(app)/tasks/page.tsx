@@ -1,28 +1,112 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { mockTasks } from '@/lib/mock-data'
+import { Loader2 } from 'lucide-react'
+import { supabase } from '@/lib/supabase/client'
+import { toast } from 'sonner'
 import type { Task } from '@/lib/types'
 
+interface SupabaseTask {
+  id: string
+  user_id: string
+  meeting_id: string | null
+  title: string
+  status: string
+  deadline: string | null
+  owner?: string | null
+  created_at: string
+}
+
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<Task[]>(mockTasks)
+  const router = useRouter()
+  const [tasks, setTasks] = useState<SupabaseTask[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [user, setUser] = useState<any>(null)
+
+  const fetchTasks = async () => {
+    try {
+      setIsLoading(true)
+      // Get current user
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      
+      if (!currentUser) {
+        router.push('/login')
+        return
+      }
+
+      setUser(currentUser)
+
+      // Fetch tasks from Supabase
+      const { data: tasksData, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        throw error
+      }
+
+      setTasks(tasksData || [])
+    } catch (error: any) {
+      console.error('Error fetching tasks:', error)
+      toast.error('Failed to load tasks')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchTasks()
+  }, [router])
 
   const columns = useMemo(() => {
     const statuses: Array<'not-started' | 'in-progress' | 'done'> = ['not-started', 'in-progress', 'done']
     return statuses.map(status => ({
       id: status,
       title: status === 'not-started' ? 'Not Started' : status === 'in-progress' ? 'In Progress' : 'Done',
-      tasks: tasks.filter(task => task.status === status),
+      tasks: tasks.filter(task => {
+        // Map Supabase status to UI status
+        const taskStatus = task.status.toLowerCase().replace(' ', '-')
+        return taskStatus === status || 
+               (status === 'in-progress' && (task.status === 'In Progress' || task.status === 'in-progress'))
+      }),
     }))
   }, [tasks])
 
-  const handleStatusChange = (taskId: number, newStatus: Task['status']) => {
+  const handleStatusChange = async (taskId: string, newStatus: Task['status']) => {
+    // Optimistically update UI
     setTasks(prev => prev.map(task => 
       task.id === taskId ? { ...task, status: newStatus } : task
     ))
+
+    try {
+      // Map UI status to Supabase status format
+      const supabaseStatus = newStatus === 'in-progress' ? 'In Progress' : 
+                            newStatus === 'not-started' ? 'Not Started' : 
+                            'Done'
+
+      // Update task in Supabase
+      const { error } = await supabase
+        .from('tasks')
+        .update({ status: supabaseStatus })
+        .eq('id', taskId)
+
+      if (error) {
+        throw error
+      }
+
+      toast.success('Task status updated')
+    } catch (error: any) {
+      console.error('Error updating task:', error)
+      toast.error('Failed to update task status')
+      // Revert optimistic update
+      fetchTasks()
+    }
   }
   return (
     <div className="space-y-6 p-6">
@@ -41,47 +125,72 @@ export default function TasksPage() {
               <Badge variant="secondary">{column.tasks.length}</Badge>
             </div>
             <div className="space-y-3 flex-1">
-              {column.tasks.map((task) => (
-                <Card 
-                  key={task.id} 
-                  className="cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow"
-                  onDoubleClick={() => {
-                    // Cycle through statuses on double click
-                    const statuses: Task['status'][] = ['not-started', 'in-progress', 'done']
-                    const currentIndex = statuses.indexOf(task.status)
-                    const nextIndex = (currentIndex + 1) % statuses.length
-                    handleStatusChange(task.id, statuses[nextIndex])
-                  }}
-                >
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm font-medium leading-snug text-primary">
-                      {task.title}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pb-4 space-y-3">
-                    <div className="text-xs text-muted-foreground">
-                      {task.meeting}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-6 w-6">
-                          <AvatarFallback className="text-xs">
-                            {task.ownerInitials}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="text-xs text-primary">{task.owner}</span>
-                      </div>
-                      <Badge variant="outline" className="text-xs text-primary">
-                        {task.deadline}
-                      </Badge>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-              {column.tasks.length === 0 && (
-                <div className="rounded-lg border-2 border-dashed p-8 text-center text-sm text-muted-foreground">
-                  No tasks
+              {isLoading ? (
+                <div className="flex items-center justify-center p-8">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 </div>
+              ) : (
+                <>
+                  {column.tasks.map((task) => {
+                    // Get owner initials
+                    const ownerInitials = task.owner 
+                      ? task.owner.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+                      : 'NA'
+                    
+                    // Format deadline
+                    const deadline = task.deadline 
+                      ? new Date(task.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                      : 'No deadline'
+
+                    return (
+                      <Card 
+                        key={task.id} 
+                        className="cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow"
+                        onDoubleClick={() => {
+                          // Cycle through statuses on double click
+                          const statuses: Task['status'][] = ['not-started', 'in-progress', 'done']
+                          const currentStatus = task.status.toLowerCase().replace(' ', '-')
+                          const currentIndex = statuses.indexOf(currentStatus as Task['status'])
+                          const nextIndex = (currentIndex + 1) % statuses.length
+                          handleStatusChange(task.id, statuses[nextIndex])
+                        }}
+                      >
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-sm font-medium leading-snug text-primary">
+                            {task.title}
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="pb-4 space-y-3">
+                          {task.meeting_id && (
+                            <div className="text-xs text-muted-foreground">
+                              Meeting ID: {task.meeting_id}
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between">
+                            {task.owner && (
+                              <div className="flex items-center gap-2">
+                                <Avatar className="h-6 w-6">
+                                  <AvatarFallback className="text-xs">
+                                    {ownerInitials}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs text-primary">{task.owner}</span>
+                              </div>
+                            )}
+                            <Badge variant="outline" className="text-xs text-primary">
+                              {deadline}
+                            </Badge>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                  {column.tasks.length === 0 && (
+                    <div className="rounded-lg border-2 border-dashed p-8 text-center text-sm text-muted-foreground">
+                      No tasks
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

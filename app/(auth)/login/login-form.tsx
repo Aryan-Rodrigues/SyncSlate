@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from 'sonner'
+import { supabase } from '@/lib/supabase/client'
 
 export function LoginForm() {
   const router = useRouter()
@@ -17,20 +18,35 @@ export function LoginForm() {
     password: '',
   })
 
+  const handleLogin = async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+    if (error) throw error
+    
+    // Wait a moment for the session to be established
+    await new Promise(resolve => setTimeout(resolve, 200))
+    
+    // Verify the session is set
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      throw new Error('Session not established. Please try again.')
+    }
+    
+    // Use window.location for a full page reload to ensure server components get the session
+    window.location.href = '/dashboard'
+  }
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
 
     try {
-      // Fake login bypass for MVP - no validation needed
-      await new Promise(resolve => setTimeout(resolve, 500))
-      
-      // Simulate successful login
-      toast.success('Successfully signed in!')
-      router.push('/dashboard')
-    } catch (error) {
-      toast.error('Invalid email or password')
-    } finally {
+      await handleLogin(formData.email, formData.password)
+      // Don't show toast here since we're redirecting immediately
+    } catch (error: any) {
+      toast.error(error?.message || 'Invalid email or password')
       setIsLoading(false)
     }
   }

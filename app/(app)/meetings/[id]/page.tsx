@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -14,38 +14,132 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
-import { ArrowLeft, RefreshCw, Save, CalendarIcon } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Save, CalendarIcon, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { getMeetingById, getTasksByMeeting, getDecisionsByMeeting, mockTeamMembers } from '@/lib/mock-data'
+import { supabase } from '@/lib/supabase/client'
+import { mockTeamMembers } from '@/lib/mock-data'
+
+interface SupabaseMeeting {
+  id: string
+  user_id: string
+  title: string
+  raw_notes: string | null
+  ai_summary: string | null
+  meeting_date: string | null
+  created_at: string
+}
+
+interface SupabaseTask {
+  id: string
+  user_id: string
+  meeting_id: string | null
+  title: string
+  status: string
+  deadline: string | null
+  owner: string | null
+  created_at: string
+}
 
 export default function MeetingDetailPage() {
   const params = useParams()
-  const meetingId = Number(params.id)
-  const meeting = getMeetingById(meetingId)
+  const router = useRouter()
+  const meetingId = params.id as string
   
-  const [selectedStatus, setSelectedStatus] = useState<Record<number, string>>({})
-  const [selectedOwner, setSelectedOwner] = useState<Record<number, string>>({})
+  const [meeting, setMeeting] = useState<SupabaseMeeting | null>(null)
+  const [actionItems, setActionItems] = useState<SupabaseTask[]>([])
+  const [selectedStatus, setSelectedStatus] = useState<Record<string, string>>({})
+  const [selectedOwner, setSelectedOwner] = useState<Record<string, string>>({})
+  const [selectedDeadline, setSelectedDeadline] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
-  const [actionItems, setActionItems] = useState(getTasksByMeeting(meetingId))
-  const [decisions] = useState(getDecisionsByMeeting(meetingId))
+  const [isLoading, setIsLoading] = useState(true)
+  const [user, setUser] = useState<any>(null)
 
   useEffect(() => {
-    if (meeting) {
-      const tasks = getTasksByMeeting(meetingId)
-      setActionItems(tasks)
-      // Initialize status and owner from tasks
-      const initialStatus: Record<number, string> = {}
-      const initialOwner: Record<number, string> = {}
-      tasks.forEach(task => {
-        initialStatus[task.id] = task.status
-        initialOwner[task.id] = task.owner
-      })
-      setSelectedStatus(initialStatus)
-      setSelectedOwner(initialOwner)
+    const fetchMeetingAndTasks = async () => {
+      try {
+        setIsLoading(true)
+        // Get current user
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
+        
+        if (!currentUser) {
+          router.push('/login')
+          return
+        }
+
+        setUser(currentUser)
+
+        // Fetch meeting from Supabase
+        const { data: meetingData, error: meetingError } = await supabase
+          .from('meetings')
+          .select('*')
+          .eq('id', meetingId)
+          .eq('user_id', currentUser.id)
+          .single()
+
+        if (meetingError) {
+          throw meetingError
+        }
+
+        if (!meetingData) {
+          toast.error('Meeting not found')
+          router.push('/meetings')
+          return
+        }
+
+        setMeeting(meetingData)
+
+        // Fetch tasks for this meeting
+        const { data: tasksData, error: tasksError } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('meeting_id', meetingId)
+          .eq('user_id', currentUser.id)
+          .order('created_at', { ascending: false })
+
+        if (tasksError) {
+          throw tasksError
+        }
+
+        setActionItems(tasksData || [])
+        
+        // Initialize status, owner, and deadline from tasks
+        const initialStatus: Record<string, string> = {}
+        const initialOwner: Record<string, string> = {}
+        const initialDeadline: Record<string, string> = {}
+        
+        (tasksData || []).forEach(task => {
+          initialStatus[task.id] = task.status || 'Not Started'
+          initialOwner[task.id] = task.owner || ''
+          initialDeadline[task.id] = task.deadline || ''
+        })
+        
+        setSelectedStatus(initialStatus)
+        setSelectedOwner(initialOwner)
+        setSelectedDeadline(initialDeadline)
+      } catch (error: any) {
+        console.error('Error fetching meeting:', error)
+        toast.error('Failed to load meeting')
+      } finally {
+        setIsLoading(false)
+      }
     }
-  }, [meetingId, meeting])
+
+    if (meetingId) {
+      fetchMeetingAndTasks()
+    }
+  }, [meetingId, router])
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6 p-6">
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      </div>
+    )
+  }
 
   if (!meeting) {
     return (
@@ -60,8 +154,12 @@ export default function MeetingDetailPage() {
     )
   }
 
-  const rawNotes = meeting.rawNotes || `Meeting: ${meeting.title}\nDate: ${meeting.date}\nAttendees: ${meeting.participants.join(', ')}`
-  const aiSummary = meeting.aiSummary || `Summary for ${meeting.title}`
+  const rawNotes = meeting.raw_notes || `Meeting: ${meeting.title}\nDate: ${meeting.meeting_date || meeting.created_at}`
+  const aiSummary = meeting.ai_summary || `Summary for ${meeting.title}`
+  const meetingDate = meeting.meeting_date 
+    ? new Date(meeting.meeting_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    : new Date(meeting.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+  const meetingTime = new Date(meeting.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 
   return (
     <div className="space-y-6 p-6">
@@ -74,7 +172,7 @@ export default function MeetingDetailPage() {
           </Link>
           <div>
             <h1 className="text-3xl font-bold">{meeting.title}</h1>
-            <p className="text-muted-foreground">{meeting.date} at {meeting.time}</p>
+            <p className="text-muted-foreground">{meetingDate} at {meetingTime}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -94,13 +192,43 @@ export default function MeetingDetailPage() {
           </Button>
           <Button
             onClick={async () => {
+              if (!user || !meeting) return
+              
               setIsSaving(true)
-              // Placeholder: In a real app, this would save the changes
-              await new Promise(resolve => setTimeout(resolve, 1000))
-              toast.success('Changes saved successfully')
-              setIsSaving(false)
+              
+              try {
+                // Update all tasks that have been modified
+                const updatePromises = actionItems.map(async (task) => {
+                  const status = selectedStatus[task.id] || task.status
+                  const owner = selectedOwner[task.id] || task.owner
+                  const deadline = selectedDeadline[task.id] || task.deadline
+                  
+                  // Map UI status to Supabase format
+                  const supabaseStatus = status === 'in-progress' ? 'In Progress' : 
+                                       status === 'not-started' ? 'Not Started' : 
+                                       status === 'done' ? 'Done' : status
+
+                  return supabase
+                    .from('tasks')
+                    .update({
+                      status: supabaseStatus,
+                      owner: owner || null,
+                      deadline: deadline || null,
+                    })
+                    .eq('id', task.id)
+                    .eq('user_id', user.id)
+                })
+
+                await Promise.all(updatePromises)
+                toast.success('Changes saved successfully')
+              } catch (error: any) {
+                console.error('Error saving tasks:', error)
+                toast.error('Failed to save changes')
+              } finally {
+                setIsSaving(false)
+              }
             }}
-            disabled={isSaving}
+            disabled={isSaving || !user || !meeting}
           >
             <Save className={`mr-2 h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
             {isSaving ? 'Saving...' : 'Save Changes'}
@@ -134,14 +262,7 @@ export default function MeetingDetailPage() {
             <div>
               <h3 className="font-semibold mb-3">Key Decisions</h3>
               <div className="space-y-3">
-                {decisions.map((decision) => (
-                  <div key={decision.id} className="flex items-start gap-2">
-                    <Badge variant={decision.impact === 'high' ? 'destructive' : 'secondary'} className="mt-0.5">
-                      {decision.impact}
-                    </Badge>
-                    <p className="text-sm flex-1">{decision.text}</p>
-                  </div>
-                ))}
+                <p className="text-sm text-muted-foreground">No decisions recorded yet</p>
               </div>
             </div>
           </CardContent>
@@ -154,59 +275,71 @@ export default function MeetingDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {actionItems.map((item) => (
-                <div key={item.id} className="space-y-2 pb-4 border-b last:border-0">
-                  <p className="text-sm font-medium">{item.task}</p>
-                  <div className="grid gap-2">
-                    <Select
-                      value={selectedOwner[item.id] || item.owner}
-                      onValueChange={(value) => {
-                        setSelectedOwner({ ...selectedOwner, [item.id]: value })
-                        setActionItems(prev => prev.map(task => 
-                          task.id === item.id ? { ...task, owner: value } : task
-                        ))
-                      }}
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="Assign to..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {mockTeamMembers.map((member) => (
-                          <SelectItem key={member} value={member}>
-                            {member}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select
-                      value={selectedStatus[item.id] || item.status}
-                      onValueChange={(value) => {
-                        setSelectedStatus({ ...selectedStatus, [item.id]: value })
-                        setActionItems(prev => prev.map(task => 
-                          task.id === item.id ? { ...task, status: value as 'not-started' | 'in-progress' | 'done' } : task
-                        ))
-                      }}
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="Status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="not-started">Not Started</SelectItem>
-                        <SelectItem value="in-progress">In Progress</SelectItem>
-                        <SelectItem value="done">Done</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <div className="relative">
-                      <CalendarIcon className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        type="date"
-                        defaultValue={item.deadline}
-                        className="h-8 text-xs pl-7"
-                      />
+              {actionItems.length > 0 ? (
+                actionItems.map((item) => (
+                  <div key={item.id} className="space-y-2 pb-4 border-b last:border-0">
+                    <p className="text-sm font-medium">{item.title}</p>
+                    <div className="grid gap-2">
+                      <Select
+                        value={selectedOwner[item.id] || item.owner || ''}
+                        onValueChange={(value) => {
+                          setSelectedOwner({ ...selectedOwner, [item.id]: value })
+                          setActionItems(prev => prev.map(task => 
+                            task.id === item.id ? { ...task, owner: value } : task
+                          ))
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Assign to..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {mockTeamMembers.map((member) => (
+                            <SelectItem key={member} value={member}>
+                              {member}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={selectedStatus[item.id] || item.status || 'Not Started'}
+                        onValueChange={(value) => {
+                          setSelectedStatus({ ...selectedStatus, [item.id]: value })
+                          setActionItems(prev => prev.map(task => 
+                            task.id === item.id ? { ...task, status: value } : task
+                          ))
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Not Started">Not Started</SelectItem>
+                          <SelectItem value="In Progress">In Progress</SelectItem>
+                          <SelectItem value="Done">Done</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <div className="relative">
+                        <CalendarIcon className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          type="date"
+                          value={selectedDeadline[item.id] || item.deadline || ''}
+                          onChange={(e) => {
+                            setSelectedDeadline({ ...selectedDeadline, [item.id]: e.target.value })
+                            setActionItems(prev => prev.map(task => 
+                              task.id === item.id ? { ...task, deadline: e.target.value } : task
+                            ))
+                          }}
+                          className="h-8 text-xs pl-7"
+                        />
+                      </div>
                     </div>
                   </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-sm text-muted-foreground">
+                  No action items yet
                 </div>
-              ))}
+              )}
             </div>
           </CardContent>
         </Card>
