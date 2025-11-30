@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MobileSidebar } from '@/components/mobile-sidebar'
@@ -27,6 +27,31 @@ const workspaces = [
 export function TopBar() {
   const router = useRouter()
   const [currentWorkspace, setCurrentWorkspace] = useState(workspaces[0])
+  const [user, setUser] = useState<any>(null)
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (currentUser) {
+        setUser(currentUser)
+      }
+    }
+    fetchUser()
+  }, [])
+
+  // Get user initials for avatar
+  const getUserInitials = () => {
+    if (!user) return 'U'
+    const fullName = user.user_metadata?.full_name || user.email || ''
+    if (fullName) {
+      const nameParts = fullName.split(' ')
+      if (nameParts.length >= 2) {
+        return (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+      }
+      return fullName.substring(0, 2).toUpperCase()
+    }
+    return user.email?.substring(0, 2).toUpperCase() || 'U'
+  }
 
   const handleWorkspaceChange = (workspaceId: string) => {
     const workspace = workspaces.find(w => w.id === workspaceId)
@@ -94,7 +119,7 @@ export function TopBar() {
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="relative h-9 w-9 rounded-full">
             <Avatar className="h-9 w-9">
-              <AvatarFallback>JD</AvatarFallback>
+              <AvatarFallback>{getUserInitials()}</AvatarFallback>
             </Avatar>
           </Button>
         </DropdownMenuTrigger>

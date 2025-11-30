@@ -19,10 +19,11 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase/client'
 import { mockTeamMembers } from '@/lib/mock-data'
+import { defaultMeetings, defaultTasks } from '@/lib/default-data'
 
 interface SupabaseMeeting {
   id: string
-  user_id: string
+  user_id: string | null
   title: string
   raw_notes: string | null
   ai_summary: string | null
@@ -32,7 +33,7 @@ interface SupabaseMeeting {
 
 interface SupabaseTask {
   id: string
-  user_id: string
+  user_id: string | null
   meeting_id: string | null
   title: string
   status: string
@@ -70,28 +71,44 @@ export default function MeetingDetailPage() {
 
         setUser(currentUser)
 
-        // Fetch meeting from Supabase
-        const { data: meetingData, error: meetingError } = await supabase
-          .from('meetings')
-          .select('*')
-          .eq('id', meetingId)
-          .eq('user_id', currentUser.id)
-          .single()
+        // First check if it's a default meeting
+        const defaultMeeting = defaultMeetings.find(m => m.id === meetingId)
+        
+        let meetingData: SupabaseMeeting | null = null
+        
+        if (defaultMeeting) {
+          // Use default meeting
+          meetingData = defaultMeeting as SupabaseMeeting
+        } else {
+          // Fetch meeting from Supabase
+          const { data: fetchedMeeting, error: meetingError } = await supabase
+            .from('meetings')
+            .select('*')
+            .eq('id', meetingId)
+            .eq('user_id', currentUser.id)
+            .single()
 
-        if (meetingError) {
-          throw meetingError
-        }
+          if (meetingError) {
+            throw meetingError
+          }
 
-        if (!meetingData) {
-          toast.error('Meeting not found')
-          router.push('/meetings')
-          return
+          if (!fetchedMeeting) {
+            toast.error('Meeting not found')
+            router.push('/meetings')
+            return
+          }
+
+          meetingData = fetchedMeeting
         }
 
         setMeeting(meetingData)
 
-        // Fetch tasks for this meeting
-        const { data: tasksData, error: tasksError } = await supabase
+        // Fetch tasks for this meeting - combine user tasks with default tasks
+        // Get default tasks for this meeting
+        const defaultTasksForMeeting = defaultTasks.filter(t => t.meeting_id === meetingId)
+        
+        // Get user's tasks for this meeting
+        const { data: userTasksData, error: tasksError } = await supabase
           .from('tasks')
           .select('*')
           .eq('meeting_id', meetingId)
@@ -102,14 +119,20 @@ export default function MeetingDetailPage() {
           throw tasksError
         }
 
-        setActionItems(tasksData || [])
+        // Combine default tasks with user tasks
+        const allTasks: SupabaseTask[] = [
+          ...defaultTasksForMeeting,
+          ...(userTasksData || []),
+        ]
+        
+        setActionItems(allTasks)
         
         // Initialize status, owner, and deadline from tasks
         const initialStatus: Record<string, string> = {}
         const initialOwner: Record<string, string> = {}
         const initialDeadline: Record<string, string> = {}
         
-        (tasksData || []).forEach(task => {
+        allTasks.forEach((task: SupabaseTask) => {
           initialStatus[task.id] = task.status || 'Not Started'
           initialOwner[task.id] = task.owner || ''
           initialDeadline[task.id] = task.deadline || ''
@@ -197,29 +220,46 @@ export default function MeetingDetailPage() {
               setIsSaving(true)
               
               try {
-                // Update all tasks that have been modified
-                const updatePromises = actionItems.map(async (task) => {
-                  const status = selectedStatus[task.id] || task.status
-                  const owner = selectedOwner[task.id] || task.owner
-                  const deadline = selectedDeadline[task.id] || task.deadline
-                  
-                  // Map UI status to Supabase format
-                  const supabaseStatus = status === 'in-progress' ? 'In Progress' : 
-                                       status === 'not-started' ? 'Not Started' : 
-                                       status === 'done' ? 'Done' : status
+                // Update all tasks that have been modified (skip default tasks with user_id === null)
+                const updatePromises = actionItems
+                  .filter(task => task.user_id !== null) // Only update user's own tasks
+                  .map(async (task) => {
+                    const status = selectedStatus[task.id] || task.status
+                    const owner = selectedOwner[task.id] || task.owner
+                    const deadline = selectedDeadline[task.id] || task.deadline
+                    
+                    // Map UI status to Supabase format
+                    const supabaseStatus = status === 'in-progress' ? 'In Progress' : 
+                                         status === 'not-started' ? 'Not Started' : 
+                                         status === 'done' ? 'Done' : status
 
-                  return supabase
-                    .from('tasks')
-                    .update({
-                      status: supabaseStatus,
-                      owner: owner || null,
-                      deadline: deadline || null,
-                    })
-                    .eq('id', task.id)
-                    .eq('user_id', user.id)
-                })
+                    return supabase
+                      .from('tasks')
+                      .update({
+                        status: supabaseStatus,
+                        owner: owner || null,
+                        deadline: deadline || null,
+                      })
+                      .eq('id', task.id)
+                      .eq('user_id', user.id)
+                  })
 
                 await Promise.all(updatePromises)
+                
+                // Update UI for default tasks (optimistic update only)
+                const defaultTasksToUpdate = actionItems.filter(task => task.user_id === null)
+                if (defaultTasksToUpdate.length > 0) {
+                  setActionItems(prev => prev.map(task => {
+                    if (task.user_id === null) {
+                      const status = selectedStatus[task.id] || task.status
+                      const owner = selectedOwner[task.id] || task.owner
+                      const deadline = selectedDeadline[task.id] || task.deadline
+                      return { ...task, status, owner, deadline }
+                    }
+                    return task
+                  }))
+                }
+                
                 toast.success('Changes saved successfully')
               } catch (error: any) {
                 console.error('Error saving tasks:', error)

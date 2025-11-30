@@ -18,10 +18,11 @@ import { UploadNotesModal } from '@/components/modals/upload-notes-modal'
 import { supabase } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { defaultMeetings } from '@/lib/default-data'
 
 interface SupabaseMeeting {
   id: string
-  user_id: string
+  user_id: string | null // null for default meetings
   title: string
   raw_notes: string | null
   ai_summary: string | null
@@ -64,7 +65,17 @@ export default function MeetingsPage() {
         throw error
       }
 
-      setMeetings(meetingsData || [])
+      // Combine user meetings with default meetings
+      const allMeetings = [
+        ...(meetingsData || []),
+        ...defaultMeetings,
+      ].sort((a, b) => {
+        const dateA = new Date(a.meeting_date || a.created_at).getTime()
+        const dateB = new Date(b.meeting_date || b.created_at).getTime()
+        return dateB - dateA
+      })
+
+      setMeetings(allMeetings)
     } catch (error: any) {
       console.error('Error fetching meetings:', error)
       toast.error('Failed to load meetings')

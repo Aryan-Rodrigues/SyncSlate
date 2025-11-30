@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,6 +13,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Upload, X } from 'lucide-react'
+import { supabase } from '@/lib/supabase/client'
 
 interface ChangeAvatarModalProps {
   open: boolean
@@ -22,6 +23,31 @@ interface ChangeAvatarModalProps {
 export function ChangeAvatarModal({ open, onOpenChange }: ChangeAvatarModalProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [user, setUser] = useState<any>(null)
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (currentUser) {
+        setUser(currentUser)
+      }
+    }
+    fetchUser()
+  }, [])
+
+  // Get user initials for avatar
+  const getUserInitials = () => {
+    if (!user) return 'U'
+    const fullName = user.user_metadata?.full_name || user.email || ''
+    if (fullName) {
+      const nameParts = fullName.split(' ')
+      if (nameParts.length >= 2) {
+        return (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+      }
+      return fullName.substring(0, 2).toUpperCase()
+    }
+    return user.email?.substring(0, 2).toUpperCase() || 'U'
+  }
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -77,7 +103,7 @@ export function ChangeAvatarModal({ open, onOpenChange }: ChangeAvatarModalProps
               {previewUrl ? (
                 <AvatarImage src={previewUrl || "/placeholder.svg"} alt="Preview" />
               ) : (
-                <AvatarFallback className="text-4xl">JD</AvatarFallback>
+                <AvatarFallback className="text-4xl">{getUserInitials()}</AvatarFallback>
               )}
             </Avatar>
 

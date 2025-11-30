@@ -9,10 +9,11 @@ import { Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import type { Task } from '@/lib/types'
+import { defaultTasks } from '@/lib/default-data'
 
 interface SupabaseTask {
   id: string
-  user_id: string
+  user_id: string | null // null for default tasks
   meeting_id: string | null
   title: string
   status: string
@@ -51,7 +52,17 @@ export default function TasksPage() {
         throw error
       }
 
-      setTasks(tasksData || [])
+      // Combine user tasks with default tasks
+      const allTasks = [
+        ...(tasksData || []),
+        ...defaultTasks,
+      ].sort((a, b) => {
+        const dateA = new Date(a.created_at).getTime()
+        const dateB = new Date(b.created_at).getTime()
+        return dateB - dateA
+      })
+
+      setTasks(allTasks)
     } catch (error: any) {
       console.error('Error fetching tasks:', error)
       toast.error('Failed to load tasks')
@@ -79,22 +90,34 @@ export default function TasksPage() {
   }, [tasks])
 
   const handleStatusChange = async (taskId: string, newStatus: Task['status']) => {
-    // Optimistically update UI
-    setTasks(prev => prev.map(task => 
-      task.id === taskId ? { ...task, status: newStatus } : task
+    // Map UI status to Supabase status format
+    const supabaseStatus = newStatus === 'in-progress' ? 'In Progress' : 
+                          newStatus === 'not-started' ? 'Not Started' : 
+                          'Done'
+
+    // Check if this is a default task (user_id is null)
+    const task = tasks.find(t => t.id === taskId)
+    if (task && task.user_id === null) {
+      // For default tasks, just update the UI optimistically (no database update)
+      setTasks(prev => prev.map(t => 
+        t.id === taskId ? { ...t, status: supabaseStatus } : t
+      ))
+      toast.success('Task status updated (sample task)')
+      return
+    }
+
+    // Optimistically update UI for user's own tasks
+    setTasks(prev => prev.map(t => 
+      t.id === taskId ? { ...t, status: supabaseStatus } : t
     ))
 
     try {
-      // Map UI status to Supabase status format
-      const supabaseStatus = newStatus === 'in-progress' ? 'In Progress' : 
-                            newStatus === 'not-started' ? 'Not Started' : 
-                            'Done'
-
-      // Update task in Supabase
+      // Update task in Supabase (only for user's own tasks)
       const { error } = await supabase
         .from('tasks')
         .update({ status: supabaseStatus })
         .eq('id', taskId)
+        .eq('user_id', user?.id)
 
       if (error) {
         throw error
